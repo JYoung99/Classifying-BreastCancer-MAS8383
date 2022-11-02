@@ -1,0 +1,89 @@
+---
+title: "Classification in the BreastCancer data"
+author: "Jack Young"
+date: '2022-11-01'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(mlbench)
+library(ggplot2)
+data(BreastCancer)
+```
+
+## Cleaning the data
+
+```{r cleanup}
+# Remove NA observations from the data
+fully_observed_bc_data <- na.omit(BreastCancer)
+# Convert factors to numeric, omitting the class column
+numeric_dat <- mutate_if(fully_observed_bc_data[,1:10], is.factor, ~as.numeric(.x))
+# Add the class column back on to the data, keeping it as a factor
+dat <- cbind(numeric_dat, fully_observed_bc_data$Class)
+colnames(dat)[11] <- "Class"
+
+```
+
+## Exploring the data
+
+
+```{r summary}
+## Summarise the data
+summary(dat)
+```
+
+```{r histograms}
+## Plot histograms of the numeric variables
+ggplot(gather(dat[,2:10]), aes(value)) +
+  geom_histogram(bins = 10) +
+  facet_wrap(~key, scales = 'free_x')
+```
+
+
+```{r heatmap}
+## Take the correlation matrix of all numeric variables in the data
+cor_matrix <- cor(dat[,2:10])
+corrplot::corrplot(cor_matrix)
+```
+
+```{r colmeans}
+## Form subsets of the data according to their class
+benign_dat <- subset(dat, Class=="benign")
+malignant_dat <- subset(dat, Class=="malignant")
+
+## Take the column means of the numeric values in each subset
+means <- rbind(colMeans(benign_dat[,2:10]), colMeans(malignant_dat[,2:10]))
+rownames(means) <- c("Benign", "Malignant")
+print(means)
+```
+## Classifying the data
+
+### Logistic regression
+
+```{r fullmodel}
+## Convert class factors to 0 and 1 for linear model
+dat$Class <- as.numeric(dat$Class) - 1
+## Fit a complete linear model with all numerical values
+fit <- lm(Class~., data = dat[,2:11])
+summary(fit)
+```
+
+
+
+
+
+
+
+
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
