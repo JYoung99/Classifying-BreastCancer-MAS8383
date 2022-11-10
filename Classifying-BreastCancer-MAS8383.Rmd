@@ -15,75 +15,129 @@ data(BreastCancer)
 
 ## Cleaning the data
 
+Before we start drawing any insights from the data, we want to first clean it
+up into a workable form. Firstly, note that there are some missing observations
+on predictors in the data, which have been encoded as _NA_. Thankfully, there
+are very little of these observations relative to the total number of
+observations in the data, so we can simply omit these. Additionally, we have
+that the nine cytological characteristics in the data are ordinal variables on
+a 1-10 scale, encoded as factors in the _BreastCancer_ data. For our analysis,
+we can convert these factor variables into numerical variables - we can assume
+this is a reasonable approach to take as we can more or less assume equal 
+distancing between the 10 levels, and the 1-10 ordering is preserved resulting
+in no loss of information.
+
 ```{r cleanup}
 # Remove NA observations from the data
 fully_observed_bc_data <- na.omit(BreastCancer)
-# Convert factors to numeric, omitting the class column
-numeric_dat <- mutate_if(fully_observed_bc_data[,1:10], is.factor, ~as.numeric(.x))
-# Add the class column back on to the data, keeping it as a factor
-dat <- cbind(numeric_dat, fully_observed_bc_data$Class)
-colnames(dat)[11] <- "Class"
-
+# Convert factors to numeric
+dat <- mutate_if(fully_observed_bc_data, is.factor, ~as.numeric(.x))
+# Code our Class variable as 1s and 0s - where 0 represents a benign cell
+# and 1 represents a malignant cell
+dat$Class <- dat$Class - 1
 ```
 
 ## Exploring the data
 
+Now our data is in the correct format, we begin our exploration - a good place
+to start is the _summary_ function:
 
 ```{r summary}
 ## Summarise the data
 summary(dat)
 ```
 
+We can already start to draw some basic insights from the data - for example,
+notice that all of the nine cytological characteristics in the data have mean
+values <5, so we can safely assume that the majority of these will have scores
+on the lower end of our 1-10 scale. Notice also, that our _Class_ variable
+has a mean value of around 0.35 - in the context of our investigation, this
+means that around 35% of the observations we are considering in our analysis
+were malignant, and the remaining were benign. To further grasp the distribution
+of values, we can plot histograms:
+
 ```{r histograms}
 ## Plot histograms of the numeric variables
-ggplot(gather(dat[,2:10]), aes(value)) +
+ggplot(gather(dat[,2:11]), aes(value)) +
   geom_histogram(bins = 10) +
   facet_wrap(~key, scales = 'free_x')
 ```
 
+As per our previous findings, we notice that the majority of our nine 
+cytological characteristics have lower values on the 1-10 scale on average,
+but now we also notice that for a number of these variables, such as _Mitoses_
+and _Cell.size_, the majority have been given a score of 1. Others exhibit a
+slightly different distribution however, such as _Cl.thickness_ which has a more
+even distribution of ordinal scores.
+
+Now, we consider the relationship between variables in our data. Before we do
+this, consider the dimensions of our data:
+```{r}
+dim(dat)
+```
+This means we have 683 observations on 11 variables. One option would be to
+produce a scatterplot matrix on our data, but this is unlikely to be effective
+given its high dimensionality. Alternatively, we can consider the correlation
+matrix to examine the relationship between variables - which is best
+visualized using a heatmap which colour codes pairs of variables based on the
+value of their Pearson correlation coefficient. Omitting the _ID_ column, we
+do this like so:
 
 ```{r heatmap}
 ## Take the correlation matrix of all numeric variables in the data
-cor_matrix <- cor(dat[,2:10])
+cor_matrix <- cor(dat[,2:11])
 corrplot::corrplot(cor_matrix)
 ```
 
+We see instantly that positive correlation is exhibited between all pairs
+of numeric variables in the data. We note that the _Mitoses_ variable
+appears to have the lowest correlation values across the board, and the 
+largest actually was our _Class_ variable - so it would initially appear to be
+the case that the higher our nine explanatory variables were ranked on our 1-10
+scale, the higher chance of that particular cell being malignant.
+
+To further explore this idea, we split our data into benign and malignant
+observations, and take the column means of each variable, allowing us to easily
+compare the two subsets:
+
 ```{r colmeans}
 ## Form subsets of the data according to their class
-benign_dat <- subset(dat, Class=="benign")
-malignant_dat <- subset(dat, Class=="malignant")
+benign_dat <- subset(dat, Class==0)
+malignant_dat <- subset(dat, Class==1)
 
 ## Take the column means of the numeric values in each subset
 means <- rbind(colMeans(benign_dat[,2:10]), colMeans(malignant_dat[,2:10]))
 rownames(means) <- c("Benign", "Malignant")
 print(means)
 ```
+
+Providing some confirmation to the findings from our correlation heatmap, we see
+that malignant observations exhibited higher values across the board for our
+explanatory variables.
+
 ## Classifying the data
 
 ### Logistic regression
 
+The first method of classification we consider is logistic regression - as
+our outcome (Class) is a binary variable, we can build a model to predict
+this based on the independent variables in our data. However with logistic
+regression, we only want to include explanatory variables that have a
+statistically significant relationship with the response variable
 ```{r fullmodel}
-## Convert class factors to 0 and 1 for linear model
-dat$Class <- as.numeric(dat$Class) - 1
 ## Fit a complete linear model with all numerical values
-fit <- lm(Class~., data = dat[,2:11])
-summary(fit)
+fit <- glm(Class~., data = dat[,2:11], family = binomial)
+(fit)
 ```
 
-
-
-
-
-
-
-
-
-## Including Plots
-
-You can also embed plots, for example:
-
-```{r pressure, echo=FALSE}
-plot(pressure)
+```{r backward-selection}
+backwards <- step(fit, direction = 'backward')
+summary(backwards)
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+```{r backwards-selection-model}
+formula(backwards)
+```
+
+### Regularized logistic regression
+
