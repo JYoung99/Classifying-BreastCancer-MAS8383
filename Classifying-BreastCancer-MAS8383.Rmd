@@ -3,16 +3,18 @@ title: "Classification in the BreastCancer data"
 author: "Jack Young"
 date: '2022-11-01'
 output:
-  pdf_document: default
   html_document: default
+  pdf_document: default
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
+library(glmnet)
 library(nclSLR)
 library(tidyverse)
 library(mlbench)
 library(ggplot2)
+library(leaps)
 data(BreastCancer)
 ```
 
@@ -30,7 +32,7 @@ this is a reasonable approach to take as we can more or less assume equal
 distancing between the 10 levels, and the 1-10 ordering is preserved resulting
 in no loss of information.
 
-```{r cleanup}
+```{r cleanup, echo=FALSE}
 # Remove NA observations from the data
 fully_observed_bc_data <- na.omit(BreastCancer)
 # Convert factors to numeric
@@ -45,7 +47,7 @@ dat$Class <- dat$Class - 1
 Now our data is in the correct format, we begin our exploration - a good place
 to start is the _summary_ function:
 
-```{r summary}
+```{r summary, echo=FALSE}
 ## Summarise the data
 summary(dat)
 ```
@@ -59,7 +61,7 @@ means that around 35% of the observations we are considering in our analysis
 were malignant, and the remaining were benign. To further grasp the distribution
 of values, we can plot histograms:
 
-```{r histograms}
+```{r histograms, echo=FALSE}
 ## Plot histograms of the numeric variables
 ggplot(gather(dat[,2:11]), aes(value)) +
   geom_histogram(bins = 10) +
@@ -75,7 +77,7 @@ even distribution of ordinal scores.
 
 Now, we consider the relationship between variables in our data. Before we do
 this, consider the dimensions of our data:
-```{r}
+```{r dim , echo=FALSE}
 dim(dat)
 ```
 This means we have 683 observations on 11 variables. One option would be to
@@ -86,7 +88,7 @@ visualized using a heatmap which colour codes pairs of variables based on the
 value of their Pearson correlation coefficient. Omitting the _ID_ column, we
 do this like so:
 
-```{r heatmap}
+```{r heatmap, echo=FALSE}
 ## Take the correlation matrix of all numeric variables in the data
 cor_matrix <- cor(dat[,2:11])
 corrplot::corrplot(cor_matrix)
@@ -103,7 +105,7 @@ To further explore this idea, we split our data into benign and malignant
 observations, and take the column means of each variable, allowing us to easily
 compare the two subsets:
 
-```{r colmeans}
+```{r colmeans, echo=FALSE}
 ## Form subsets of the data according to their class
 benign_dat <- subset(dat, Class==0)
 malignant_dat <- subset(dat, Class==1)
@@ -127,55 +129,115 @@ our outcome (Class) is a binary variable, we can build a model to predict
 this based on the independent variables in our data. However with logistic
 regression, we only want to include explanatory variables that have a
 statistically significant relationship with the response variable
-```{r fullmodel}
-## Fit a complete linear model with all numerical values
-fit <- glm(Class~., data = dat[,2:11], family = binomial)
-(fit)
+
+```{r bss, echo=FALSE}
+bss_fit <- regsubsets(Class ~.,data = dat[,2:11], method = "exhaustive",nvmax = 9)
+bss_summary <- summary(bss_fit)
+
+best_adjr2 = which.max(bss_summary$adjr2)
+best_cp = which.min(bss_summary$cp)
+best_bic = which.min(bss_summary$bic)
+p = 9
+## Create multi-panel plotting device
+par(mfrow=c(2,2))
+## Produce plots, highlighting optimal value of k
+plot(1:p, bss_summary$adjr2, xlab="Number of predictors", ylab="Adjusted Rsq", type="b")
+points(best_adjr2, bss_summary$adjr2[best_adjr2], col="red", pch=16)
+plot(1:p, bss_summary$cp, xlab="Number of predictors", ylab="Cp", type="b")
+points(best_cp, bss_summary$cp[best_cp], col="red", pch=16)
+plot(1:p, bss_summary$bic, xlab="Number of predictors", ylab="BIC", type="b")
+points(best_bic, bss_summary$bic[best_bic], col="red", pch=16)
+
 ```
 
-```{r backward-selection}
-backwards <- step(fit, direction = 'backward')
-summary(backwards)
+```{r bss_cv}
+
+## We define a function to estimate the average mean squared error
+## using general K-fold cross validation
+reg_cv = function(X1, y, fold_ind) {
+  Xy = data.frame(X1, y=y)
+  nfolds = max(fold_ind)
+  if(!all.equal(sort(unique(fold_ind)), 1:nfolds)) stop("Invalid fold partition.")
+  cv_errors = numeric(nfolds)
+  for(fold in 1:nfolds) {
+    tmp_fit = lm(y ~ ., data=Xy[fold_ind!=fold,])
+    yhat = predict(tmp_fit, Xy[fold_ind==fold,])
+    yobs = y[fold_ind==fold]
+    cv_errors[fold] = mean((yobs - yhat)^2)
+  }
+  fold_sizes = numeric(nfolds)
+  for(fold in 1:nfolds) fold_sizes[fold] = length(which(fold_ind==fold))
+  test_error = weighted.mean(cv_errors, w=fold_sizes)
+  return(test_error)
+}
+
+## Use the reg_cv function to estimate the avg mean square error across all
+## of the best possible models using each number of explanatory variables
+reg_bss_cv = function(X1, y, best_models, fold_index) {
+  p = ncol(X1)
+  test_errors = numeric(p)
+  for(k in 1:p) {
+    test_errors[k] = reg_cv(X1[,best_models[k,]], y, fold_index)
+  }
+  return(test_errors)
+}
+
+## We use 10-sample cross validation
+fold_index <- sample(10, nrow(dat), replace = TRUE)
+
+## Use our functions to estimate the MSE for each of the best models
+bss_mse = reg_bss_cv(dat[,2:10], dat$Class, bss_summary$which[,-1], fold_index)
+
+## Consider the number of variables in the model that minimises the
+## estimated MSE
+best_cv <- which.min(bss_mse)
+best_cv
 ```
 
-```{r backwards-selection-model}
-formula(backwards)
-```
+
+### Regularized logistic regression
+
+```{r lasso, echo=FALSE}
 
 
+#### LASSO CODE
 
-```{r lasso}
-library(glmnet)
 ## Choose grid of values for tuning parameter
 grid = 10^seq(5, -3, length=100)
 ## Fit a LASSO regression model for each value of the tuning parameter
 lasso_fit = glmnet(dat[,2:10], dat$Class, alpha=1, standardize = FALSE, lambda = grid)
-
 ```
 
-```{r}
+```{r lasso_plot, echo=FALSE}
+
 beta1_hat = coef(lasso_fit)
-plot(lasso_fit, xvar = "lambda", col=1:8, label=TRUE)
+plot(lasso_fit, xvar = "lambda", col=1:9, label=TRUE)
 ```
-```{r lasso cv}
+```{r lasso_cv, echo=FALSE}
+
 lasso_cv_fit = cv.glmnet(as.matrix(dat[,2:10]), dat$Class, alpha = 1, standardize = FALSE, lambda = grid)
 plot(lasso_cv_fit)
-
 ```
-```{r min lasso}
+```{r min_lasso, echo=FALSE}
+
 ## Extract value of optimal tuning parameter
 lambda_min = lasso_cv_fit$lambda.min
 i = which(lasso_cv_fit$lambda == lasso_cv_fit$lambda.min)
 lasso_cv_fit$cvm[i]
 ```
-```{r lasso coefficients}
+```{r lasso coefficients, echo=FALSE}
+
 coef(lasso_fit, s = lambda_min)
 ```
 
-```{r lda_fit}
-## Perform LDA
-#lda_fit = linDA(variables = dat[,2:10], group = dat$Class)
-#lda_fit$error_rate
+
+### Discriminant Analysis
+
+
+```{r lda_fit, echo=FALSE}
+
+
+#### DISCRIMINANT ANALYSIS CODE
 
 ## Calculate all subsets to index our explanatory variables
 all_subsets <- lapply(1:9, combn, x = c(2:10), simplify = FALSE)
@@ -201,5 +263,7 @@ for (i in 1:9){
 ```
 
 
-### Regularized logistic regression
+```{r ref.label=knitr::all_labels(), echo=TRUE, eval=FALSE}
+
+```
 
