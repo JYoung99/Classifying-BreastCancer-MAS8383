@@ -2,11 +2,14 @@
 title: "Classification in the BreastCancer data"
 author: "Jack Young"
 date: '2022-11-01'
-output: html_document
+output:
+  pdf_document: default
+  html_document: default
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
+library(nclSLR)
 library(tidyverse)
 library(mlbench)
 library(ggplot2)
@@ -138,6 +141,65 @@ summary(backwards)
 ```{r backwards-selection-model}
 formula(backwards)
 ```
+
+
+
+```{r lasso}
+library(glmnet)
+## Choose grid of values for tuning parameter
+grid = 10^seq(5, -3, length=100)
+## Fit a LASSO regression model for each value of the tuning parameter
+lasso_fit = glmnet(dat[,2:10], dat$Class, alpha=1, standardize = FALSE, lambda = grid)
+
+```
+
+```{r}
+beta1_hat = coef(lasso_fit)
+plot(lasso_fit, xvar = "lambda", col=1:8, label=TRUE)
+```
+```{r lasso cv}
+lasso_cv_fit = cv.glmnet(as.matrix(dat[,2:10]), dat$Class, alpha = 1, standardize = FALSE, lambda = grid)
+plot(lasso_cv_fit)
+
+```
+```{r min lasso}
+## Extract value of optimal tuning parameter
+lambda_min = lasso_cv_fit$lambda.min
+i = which(lasso_cv_fit$lambda == lasso_cv_fit$lambda.min)
+lasso_cv_fit$cvm[i]
+```
+```{r lasso coefficients}
+coef(lasso_fit, s = lambda_min)
+```
+
+```{r lda_fit}
+## Perform LDA
+#lda_fit = linDA(variables = dat[,2:10], group = dat$Class)
+#lda_fit$error_rate
+
+## Calculate all subsets to index our explanatory variables
+all_subsets <- lapply(1:9, combn, x = c(2:10), simplify = FALSE)
+##Set initial best error rate
+best_error_rate <- 1
+
+## Loop through all subsets of explanatory variables
+for (i in 1:9){
+  num_of_size_i <- length(all_subsets[i][[1]])
+  for (j in 1:num_of_size_i){
+    ## Perform lda for each possible subset
+    lda_fit = linDA(variables = as.matrix(dat[,all_subsets[i][[1]][j][[1]]]), group = dat$Class)
+    current_error_rate <- lda_fit$error_rate
+    ## Store the current model as the best model if it beats the
+    ## previous best error rate
+    if (current_error_rate < best_error_rate){
+      best_error_rate <- current_error_rate
+      best_lda_fit <- lda_fit
+    }
+  }
+}
+
+```
+
 
 ### Regularized logistic regression
 
