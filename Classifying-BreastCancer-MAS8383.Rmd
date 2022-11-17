@@ -3,12 +3,13 @@ title: "Classification in the BreastCancer data"
 author: "Jack Young"
 date: '2022-11-01'
 output:
-  html_document: default
   pdf_document: default
+  html_document: default
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
+set.seed(1)
 library(glmnet)
 library(nclSLR)
 library(tidyverse)
@@ -22,32 +23,37 @@ data(BreastCancer)
 
 Before we start drawing any insights from the data, we want to first clean it
 up into a workable form. Firstly, note that there are some missing observations
-on predictors in the data, which have been encoded as _NA_. Thankfully, there
+on predictors in the data, which have been encoded as `NA`. Thankfully, there
 are very little of these observations relative to the total number of
 observations in the data, so we can simply omit these. Additionally, we have
 that the nine cytological characteristics in the data are ordinal variables on
-a 1-10 scale, encoded as factors in the _BreastCancer_ data. For our analysis,
+a 1-10 scale, encoded as factors in the `BreastCancer` data. For our analysis,
 we can convert these factor variables into numerical variables - we can assume
 this is a reasonable approach to take as we can more or less assume equal 
 distancing between the 10 levels, and the 1-10 ordering is preserved resulting
 in no loss of information.
 
 ```{r cleanup, echo=FALSE}
-# Remove NA observations from the data
+
+
+#### DATA PRE-PROCESSING, EXPLORATORY ANALYSIS
+
+## Remove NA observations from the data
 fully_observed_bc_data <- na.omit(BreastCancer)
-# Convert factors to numeric
+## Convert factors to numeric
 dat <- mutate_if(fully_observed_bc_data, is.factor, ~as.numeric(.x))
-# Code our Class variable as 1s and 0s - where 0 represents a benign cell
-# and 1 represents a malignant cell
+## Code our Class variable as 1s and 0s - where 0 represents a benign cell
+## and 1 represents a malignant cell
 dat$Class <- dat$Class - 1
 ```
 
 ## Exploring the data
 
 Now our data is in the correct format, we begin our exploration - a good place
-to start is the _summary_ function:
+to start is the `summary` function:
 
 ```{r summary, echo=FALSE}
+
 ## Summarise the data
 summary(dat)
 ```
@@ -55,13 +61,14 @@ summary(dat)
 We can already start to draw some basic insights from the data - for example,
 notice that all of the nine cytological characteristics in the data have mean
 values <5, so we can safely assume that the majority of these will have scores
-on the lower end of our 1-10 scale. Notice also, that our _Class_ variable
+on the lower end of our 1-10 scale. Notice also, that our `Class` variable
 has a mean value of around 0.35 - in the context of our investigation, this
 means that around 35% of the observations we are considering in our analysis
 were malignant, and the remaining were benign. To further grasp the distribution
 of values, we can plot histograms:
 
 ```{r histograms, echo=FALSE}
+
 ## Plot histograms of the numeric variables
 ggplot(gather(dat[,2:11]), aes(value)) +
   geom_histogram(bins = 10) +
@@ -70,14 +77,16 @@ ggplot(gather(dat[,2:11]), aes(value)) +
 
 As per our previous findings, we notice that the majority of our nine 
 cytological characteristics have lower values on the 1-10 scale on average,
-but now we also notice that for a number of these variables, such as _Mitoses_
-and _Cell.size_, the majority have been given a score of 1. Others exhibit a
-slightly different distribution however, such as _Cl.thickness_ which has a more
+but now we also notice that for a number of these variables, such as `Mitoses`
+and `Cell.size`, the majority have been given a score of 1. Others exhibit a
+slightly different distribution however, such as `Cl.thickness` which has a more
 even distribution of ordinal scores.
 
 Now, we consider the relationship between variables in our data. Before we do
 this, consider the dimensions of our data:
 ```{r dim , echo=FALSE}
+
+## Check the dimensions of the data
 dim(dat)
 ```
 This means we have 683 observations on 11 variables. One option would be to
@@ -85,19 +94,20 @@ produce a scatterplot matrix on our data, but this is unlikely to be effective
 given its high dimensionality. Alternatively, we can consider the correlation
 matrix to examine the relationship between variables - which is best
 visualized using a heatmap which colour codes pairs of variables based on the
-value of their Pearson correlation coefficient. Omitting the _ID_ column, we
+value of their Pearson correlation coefficient. Omitting the `ID` column, we
 do this like so:
 
 ```{r heatmap, echo=FALSE}
+
 ## Take the correlation matrix of all numeric variables in the data
 cor_matrix <- cor(dat[,2:11])
 corrplot::corrplot(cor_matrix)
 ```
 
 We see instantly that positive correlation is exhibited between all pairs
-of numeric variables in the data. We note that the _Mitoses_ variable
+of numeric variables in the data. We note that the `Mitoses` variable
 appears to have the lowest correlation values across the board, and the 
-largest actually was our _Class_ variable - so it would initially appear to be
+largest actually was our `Class` variable - so it would initially appear to be
 the case that the higher our nine explanatory variables were ranked on our 1-10
 scale, the higher chance of that particular cell being malignant.
 
@@ -106,6 +116,7 @@ observations, and take the column means of each variable, allowing us to easily
 compare the two subsets:
 
 ```{r colmeans, echo=FALSE}
+
 ## Form subsets of the data according to their class
 benign_dat <- subset(dat, Class==0)
 malignant_dat <- subset(dat, Class==1)
@@ -128,12 +139,22 @@ The first method of classification we consider is logistic regression - as
 our outcome (Class) is a binary variable, we can build a model to predict
 this based on the independent variables in our data. However with logistic
 regression, we only want to include explanatory variables that have a
-statistically significant relationship with the response variable
+statistically significant relationship with the response variable, in order to
+avoid the issue of multicollinearity. In this investigation, we do this through
+subset selection - more specifically, the best subset selection algorithm. This
+works by using least squares, fitting a regression model for each possible
+subset of our explanatory variables. That is, for $k=1,2,...p$, the model
+$\mathcal{M}_k$ is fitted, that is, the model with a subset of $k$ explanatory
+variables that has the smallest residual sum of squares (or $R^2$).
+After having done so, we select the "best" model among these - however the
+model you select may depend on the statistic you are considering, as we can
+use either the $R^2, C_p,$ or BIC which all draw differing conclusions, as
+shown by the graphs below:
+
 
 ```{r bss, echo=FALSE}
 bss_fit <- regsubsets(Class ~.,data = dat[,2:11], method = "exhaustive",nvmax = 9)
 bss_summary <- summary(bss_fit)
-
 best_adjr2 = which.max(bss_summary$adjr2)
 best_cp = which.min(bss_summary$cp)
 best_bic = which.min(bss_summary$bic)
@@ -150,7 +171,19 @@ points(best_bic, bss_summary$bic[best_bic], col="red", pch=16)
 
 ```
 
-```{r bss_cv}
+In order to remove some of this ambiguity, we shall use cross validation, noting
+that we have already used the `set.seed()` function so that the analysis is
+reproducible. We consider 5-fold cross validation, which will split our data
+into 5 folds of roughly the same size and assign our observations to one of
+these folds. For fold $k$, we first fit the model to the training data (i.e. all
+data that falls outside fold $k$), and then use this model to predict values
+of the response variable in the training set, from which we can calculate the
+MSE. In the context of the best subset selection we have used, we shall use
+our 5-fold cross validation on each of the $\mathcal{M}_k$ we found earlier,
+and find the MSE of each of these models. We can then choose an $M_k$ based on
+that which minimises the MSE.
+
+```{r bss_cv, echo=FALSE}
 
 ## We define a function to estimate the average mean squared error
 ## using general K-fold cross validation
@@ -182,8 +215,8 @@ reg_bss_cv = function(X1, y, best_models, fold_index) {
   return(test_errors)
 }
 
-## We use 10-sample cross validation
-fold_index <- sample(10, nrow(dat), replace = TRUE)
+## We use 5-sample cross validation
+fold_index <- sample(5, nrow(dat), replace = TRUE)
 
 ## Use our functions to estimate the MSE for each of the best models
 bss_mse = reg_bss_cv(dat[,2:10], dat$Class, bss_summary$which[,-1], fold_index)
@@ -191,11 +224,27 @@ bss_mse = reg_bss_cv(dat[,2:10], dat$Class, bss_summary$which[,-1], fold_index)
 ## Consider the number of variables in the model that minimises the
 ## estimated MSE
 best_cv <- which.min(bss_mse)
-best_cv
+print(paste0("The number of variables included in our optimal model is: ",best_cv))
+print(paste0("This gives us MSE value: ",round(min(bss_mse),8)))
+
+```
+```{r which_variables, echo=FALSE}
+bss_summary$outmat[best_cv,]
+```
+We therefore can build our chosen $M_k$, and extract the coefficients:
+
+```{r best_model, echo=FALSE}
+best_model <- glm(Class~Cl.thickness + Cell.size + Bare.nuclei + Bl.cromatin + Normal.nucleoli, data = dat[,2:11])
+best_model$coefficients
 ```
 
 
 ### Regularized logistic regression
+
+We now attempt to build a classifier based on a regularized form of logistic
+regression - these methods shrink the coefficient estimates in regression by
+smoothing the least squares loss function, and in our analysis we shall
+consider the LASSO method.
 
 ```{r lasso, echo=FALSE}
 
@@ -218,13 +267,22 @@ plot(lasso_fit, xvar = "lambda", col=1:9, label=TRUE)
 lasso_cv_fit = cv.glmnet(as.matrix(dat[,2:10]), dat$Class, alpha = 1, standardize = FALSE, lambda = grid)
 plot(lasso_cv_fit)
 ```
+
+
 ```{r min_lasso, echo=FALSE}
 
-## Extract value of optimal tuning parameter
+## Extract optimal tuning parameter value
 lambda_min = lasso_cv_fit$lambda.min
+## Extract index of optimal tuning parameter
 i = which(lasso_cv_fit$lambda == lasso_cv_fit$lambda.min)
-lasso_cv_fit$cvm[i]
+
+
+print(paste0("Optimal tuning parameter value: ", round(lambda_min,8)))
+print(paste0("Optimal tuning parameter MSE: ", round(lasso_cv_fit$cvm[i], 8)))
+
 ```
+
+
 ```{r lasso coefficients, echo=FALSE}
 
 coef(lasso_fit, s = lambda_min)
@@ -260,8 +318,11 @@ for (i in 1:9){
   }
 }
 
+best_error_rate
+
 ```
 
+## Code appendix
 
 ```{r ref.label=knitr::all_labels(), echo=TRUE, eval=FALSE}
 
