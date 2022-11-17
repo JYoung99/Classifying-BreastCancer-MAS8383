@@ -41,10 +41,13 @@ in no loss of information.
 ## Remove NA observations from the data
 fully_observed_bc_data <- na.omit(BreastCancer)
 ## Convert factors to numeric
-dat <- mutate_if(fully_observed_bc_data, is.factor, ~as.numeric(.x))
+num_dat <- mutate_if(fully_observed_bc_data, is.factor, ~as.numeric(.x))
 ## Code our Class variable as 1s and 0s - where 0 represents a benign cell
 ## and 1 represents a malignant cell
-dat$Class <- dat$Class - 1
+num_dat$Class <- num_dat$Class - 1
+dat <- cbind.data.frame(num_dat$Id, scale(num_dat[,2:10]), num_dat$Class)
+names(dat)[1] <- "Id"
+names(dat)[11] <- "Class"
 ```
 
 ## Exploring the data
@@ -153,7 +156,7 @@ shown by the graphs below:
 
 
 ```{r bss, echo=FALSE}
-bss_fit <- regsubsets(Class ~.,data = dat[,2:11], method = "exhaustive",nvmax = 9)
+bss_fit <- regsubsets(Class ~.,data = dat[,2:11], method = "backward",nvmax = 9)
 bss_summary <- summary(bss_fit)
 best_adjr2 = which.max(bss_summary$adjr2)
 best_cp = which.min(bss_summary$cp)
@@ -215,8 +218,8 @@ reg_bss_cv = function(X1, y, best_models, fold_index) {
   return(test_errors)
 }
 
-## We use 5-sample cross validation
-fold_index <- sample(5, nrow(dat), replace = TRUE)
+## We use 10-sample cross validation
+fold_index <- sample(10, nrow(dat), replace = TRUE)
 
 ## Use our functions to estimate the MSE for each of the best models
 bss_mse = reg_bss_cv(dat[,2:10], dat$Class, bss_summary$which[,-1], fold_index)
@@ -234,8 +237,9 @@ bss_summary$outmat[best_cv,]
 We therefore can build our chosen $M_k$, and extract the coefficients:
 
 ```{r best_model, echo=FALSE}
-best_model <- glm(Class~Cl.thickness + Cell.size + Bare.nuclei + Bl.cromatin + Normal.nucleoli, data = dat[,2:11])
-best_model$coefficients
+
+best_model <- glm(Class~Cl.thickness + Cell.size + Cell.shape + Bare.nuclei + Bl.cromatin + Normal.nucleoli, data = dat[,2:11], family = binomial)
+summary(best_model)
 ```
 
 
@@ -244,7 +248,10 @@ best_model$coefficients
 We now attempt to build a classifier based on a regularized form of logistic
 regression - these methods shrink the coefficient estimates in regression by
 smoothing the least squares loss function, and in our analysis we shall
-consider the LASSO method.
+consider the LASSO method. The method works such that as $\lambda$ increases,
+the closer the regression coefficient estimates are to 0, and the smaller
+$\lambda$ is, the closer the coefficient estimates are to the least squares
+estimates. 
 
 ```{r lasso, echo=FALSE}
 
@@ -254,8 +261,12 @@ consider the LASSO method.
 ## Choose grid of values for tuning parameter
 grid = 10^seq(5, -3, length=100)
 ## Fit a LASSO regression model for each value of the tuning parameter
-lasso_fit = glmnet(dat[,2:10], dat$Class, alpha=1, standardize = FALSE, lambda = grid)
+lasso_fit = glmnet(dat[,2:10], dat$Class, alpha=1, standardize = FALSE, lambda = grid, family = "binomial")
 ```
+
+Now we have fit our GLM for the specified grid of $\lambda$ values, we can
+examine how varying our value of $\lambda$ affects the shrinking of the
+coefficients in our model - we can visualise this through the following plot:
 
 ```{r lasso_plot, echo=FALSE}
 
@@ -264,12 +275,12 @@ plot(lasso_fit, xvar = "lambda", col=1:9, label=TRUE)
 ```
 ```{r lasso_cv, echo=FALSE}
 
-lasso_cv_fit = cv.glmnet(as.matrix(dat[,2:10]), dat$Class, alpha = 1, standardize = FALSE, lambda = grid)
+lasso_cv_fit = cv.glmnet(as.matrix(dat[,2:10]), dat$Class, alpha = 1, standardize = FALSE, lambda = grid, type.measure = "class")
 plot(lasso_cv_fit)
 ```
 
 
-```{r min_lasso, echo=FALSE}
+```{r min lasso, echo=FALSE}
 
 ## Extract optimal tuning parameter value
 lambda_min = lasso_cv_fit$lambda.min
@@ -292,7 +303,7 @@ coef(lasso_fit, s = lambda_min)
 ### Discriminant Analysis
 
 
-```{r lda_fit, echo=FALSE}
+```{r lda fit, echo=FALSE}
 
 
 #### DISCRIMINANT ANALYSIS CODE
@@ -307,7 +318,7 @@ for (i in 1:9){
   num_of_size_i <- length(all_subsets[i][[1]])
   for (j in 1:num_of_size_i){
     ## Perform lda for each possible subset
-    lda_fit = linDA(variables = as.matrix(dat[,all_subsets[i][[1]][j][[1]]]), group = dat$Class)
+    lda_fit = linDA(variables = as.matrix(dat[,all_subsets[i][[1]][j][[1]]]), group = dat$Class, validation = "crossval")
     current_error_rate <- lda_fit$error_rate
     ## Store the current model as the best model if it beats the
     ## previous best error rate
