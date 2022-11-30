@@ -10,6 +10,7 @@ output:
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 set.seed(1)
+library(bestglm)
 library(glmnet)
 library(nclSLR)
 library(tidyverse)
@@ -31,7 +32,9 @@ a 1-10 scale, encoded as factors in the `BreastCancer` data. For our analysis,
 we can convert these factor variables into numerical variables - we can assume
 this is a reasonable approach to take as we can more or less assume equal 
 distancing between the 10 levels, and the 1-10 ordering is preserved resulting
-in no loss of information.
+in no loss of information. However, we also then standardise each of the
+9 cytological characteristics, as this accounts for differences in variability
+across the data.
 
 ```{r cleanup, echo=FALSE}
 
@@ -63,8 +66,7 @@ summary(dat)
 
 We can already start to draw some basic insights from the data - for example,
 notice that all of the nine cytological characteristics in the data have mean
-values <5, so we can safely assume that the majority of these will have scores
-on the lower end of our 1-10 scale. Notice also, that our `Class` variable
+values 0, as they have been standardised (they will also have standard deviation = 1). Notice also, that our `Class` variable
 has a mean value of around 0.35 - in the context of our investigation, this
 means that around 35% of the observations we are considering in our analysis
 were malignant, and the remaining were benign. To further grasp the distribution
@@ -78,10 +80,10 @@ ggplot(gather(dat[,2:11]), aes(value)) +
   facet_wrap(~key, scales = 'free_x')
 ```
 
-As per our previous findings, we notice that the majority of our nine 
+Taking into account the fact that the cytological characteristics were originally measured on a 1-10 scale before standardising, we notice that the majority of our nine 
 cytological characteristics have lower values on the 1-10 scale on average,
 but now we also notice that for a number of these variables, such as `Mitoses`
-and `Cell.size`, the majority have been given a score of 1. Others exhibit a
+and `Cell.size`, the majority have been given the lowest possible score of 1. Others exhibit a
 slightly different distribution however, such as `Cl.thickness` which has a more
 even distribution of ordinal scores.
 
@@ -100,7 +102,7 @@ visualized using a heatmap which colour codes pairs of variables based on the
 value of their Pearson correlation coefficient. Omitting the `ID` column, we
 do this like so:
 
-```{r heatmap, echo=FALSE}
+```{r heatmap, echo=FALSE, fig.height=4, fig.width=4}
 
 ## Take the correlation matrix of all numeric variables in the data
 cor_matrix <- cor(dat[,2:11])
@@ -151,43 +153,44 @@ $\mathcal{M}_k$ is fitted, that is, the model with a subset of $k$ explanatory
 variables that has the smallest residual sum of squares (or $R^2$).
 After having done so, we select the "best" model among these - however the
 model you select may depend on the statistic you are considering, as we can
-use either the $R^2, C_p,$ or BIC which all draw differing conclusions, as
+use either the AIC or BIC which draw differing conclusions, as
 shown by the graphs below:
 
 
 ```{r bss, echo=FALSE}
-bss_fit <- regsubsets(Class ~.,data = dat[,2:11], method = "backward",nvmax = 9)
-bss_summary <- summary(bss_fit)
-best_adjr2 = which.max(bss_summary$adjr2)
-best_cp = which.min(bss_summary$cp)
-best_bic = which.min(bss_summary$bic)
+#bss_fit <- glm(Class ~.,data = dat[,2:11], family = binomial)
+
+```
+
+
+```{r bestglm, echo = FALSE}
+aic_bestglm <- bestglm(dat[,2:11], family = binomial, IC="AIC", method = "exhaustive")
+bic_bestglm <- bestglm(dat[,2:11], family = binomial, IC="BIC", method = "exhaustive")
+best_bic = which.min(bic_bestglm$Subsets$BIC) -1
+best_aic = which.min(aic_bestglm$Subsets$AIC) -1
 p = 9
 ## Create multi-panel plotting device
-par(mfrow=c(2,2))
-## Produce plots, highlighting optimal value of k
-plot(1:p, bss_summary$adjr2, xlab="Number of predictors", ylab="Adjusted Rsq", type="b")
-points(best_adjr2, bss_summary$adjr2[best_adjr2], col="red", pch=16)
-plot(1:p, bss_summary$cp, xlab="Number of predictors", ylab="Cp", type="b")
-points(best_cp, bss_summary$cp[best_cp], col="red", pch=16)
-plot(1:p, bss_summary$bic, xlab="Number of predictors", ylab="BIC", type="b")
-points(best_bic, bss_summary$bic[best_bic], col="red", pch=16)
+par(mfrow=c(1,2))
+plot(aic_bestglm$Subsets$AIC[2:10], type = 'b', ylab = "AIC", xlab = 'Variables')
+points(best_aic, aic_bestglm$Subsets$AIC[best_aic+1], col="red", pch=16)
 
+plot(bic_bestglm$Subsets$BIC[2:10], type = 'b', ylab = "BIC", xlab = 'Variables')
+points(best_bic, bic_bestglm$Subsets$BIC[best_bic+1], col="red", pch=16)
 ```
 
 In order to remove some of this ambiguity, we shall use cross validation, noting
 that we have already used the `set.seed()` function so that the analysis is
-reproducible. We consider 5-fold cross validation, which will split our data
-into 5 folds of roughly the same size and assign our observations to one of
+reproducible. We consider 10-fold cross validation, which will split our data
+into 10 folds of roughly the same size and assign our observations to one of
 these folds. For fold $k$, we first fit the model to the training data (i.e. all
 data that falls outside fold $k$), and then use this model to predict values
 of the response variable in the training set, from which we can calculate the
 MSE. In the context of the best subset selection we have used, we shall use
-our 5-fold cross validation on each of the $\mathcal{M}_k$ we found earlier,
+our 10-fold cross validation on each of the $\mathcal{M}_k$ we found earlier,
 and find the MSE of each of these models. We can then choose an $M_k$ based on
 that which minimises the MSE.
 
 ```{r bss_cv, echo=FALSE}
-
 ## We define a function to estimate the average mean squared error
 ## using general K-fold cross validation
 reg_cv = function(X1, y, fold_ind) {
@@ -219,28 +222,30 @@ reg_bss_cv = function(X1, y, best_models, fold_index) {
 }
 
 ## We use 10-sample cross validation
-fold_index <- sample(10, nrow(dat), replace = TRUE)
+fold_index <- sample(1:10, nrow(dat), replace = TRUE)
 
 ## Use our functions to estimate the MSE for each of the best models
-bss_mse = reg_bss_cv(dat[,2:10], dat$Class, bss_summary$which[,-1], fold_index)
+bss_mse_aic = reg_bss_cv(dat[,2:10], dat$Class, as.matrix(aic_bestglm$Subsets[2:10, 2:10]), fold_index)
 
+bss_mse_bic = reg_bss_cv(dat[,2:10], dat$Class, as.matrix(bic_bestglm$Subsets[2:10,2:10]), fold_index)
 ## Consider the number of variables in the model that minimises the
 ## estimated MSE
-best_cv <- which.min(bss_mse)
-print(paste0("The number of variables included in our optimal model is: ",best_cv))
-print(paste0("This gives us MSE value: ",round(min(bss_mse),8)))
+cv_aic <- bss_mse_aic[best_aic]
+cv_bic <- bss_mse_bic[best_bic]
+
+print(paste0("The CV error obtained from the optimal model according to AIC BSS is: ", round(cv_aic, 8)))
+print(paste0("The SV error obtained from the optimal model according to BIC BSS is: ", round(cv_bic, 8)))
+
 
 ```
 ```{r which_variables, echo=FALSE}
-bss_summary$outmat[best_cv,]
+aic_bestglm$BestModel
 ```
-We therefore can build our chosen $M_k$, and extract the coefficients:
-
-```{r best_model, echo=FALSE}
-
-best_model <- glm(Class~Cl.thickness + Cell.size + Cell.shape + Bare.nuclei + Bl.cromatin + Normal.nucleoli, data = dat[,2:11], family = binomial)
-summary(best_model)
-```
+We therefore can build our chosen $M_k$, and extract the coefficients from the above summary.
+We notice that (aside from the intercept, of course) all of the 
+coefficients in this model are positive-valued, the greatest of which is `Cl.thickness`, suggesting
+the higher this value is on our scale, the greater the likelihood
+of the observation being malignant.
 
 
 ### Regularized logistic regression
@@ -265,21 +270,23 @@ lasso_fit = glmnet(dat[,2:10], dat$Class, alpha=1, standardize = FALSE, lambda =
 ```
 
 Now we have fit our GLM for the specified grid of $\lambda$ values, we can
-examine how varying our value of $\lambda$ affects the shrinking of the
-coefficients in our model - we can visualise this through the following plot:
+examine how varying our value of (logged) $\lambda$ affects the shrinking of the
+coefficients in our model - we can visualize this through the following plot:
 
-```{r lasso_plot, echo=FALSE}
+```{r lasso_plot, echo=FALSE, fig.width=6, fig.height=4}
 
 beta1_hat = coef(lasso_fit)
 plot(lasso_fit, xvar = "lambda", col=1:9, label=TRUE)
 ```
+Now using 10-fold cross validation once again, we can plot how varying our
+value of $\lambda$ affects the estimated MSE of the method:
 ```{r lasso_cv, echo=FALSE}
 
 lasso_cv_fit = cv.glmnet(as.matrix(dat[,2:10]), dat$Class, alpha = 1, standardize = FALSE, lambda = grid, type.measure = "class")
 plot(lasso_cv_fit)
 ```
-
-
+Furthermore - we can extract the optimal value for $\lambda$ and the
+associated MSE estimate:
 ```{r min lasso, echo=FALSE}
 
 ## Extract optimal tuning parameter value
@@ -292,16 +299,32 @@ print(paste0("Optimal tuning parameter value: ", round(lambda_min,8)))
 print(paste0("Optimal tuning parameter MSE: ", round(lasso_cv_fit$cvm[i], 8)))
 
 ```
-
+Using this value of $\lambda$, we can check the coefficients of the model that
+results:
 
 ```{r lasso coefficients, echo=FALSE}
 
 coef(lasso_fit, s = lambda_min)
 ```
-
+The model presented above is different from the model found
+as a result of best subset selection, in the sense that this model
+has preserved each of the nine explanatory variables. There are however,
+some similarities. For example, the intercept has once again been attributed a negative value of similar magnitude, and all
+explanatory variables are positively-valued with `Cl.thickness` 
+the greatest of the set.
 
 ### Discriminant Analysis
 
+The final method we consider in our analyses is discriminant analysis, both
+QDA and LDA. To carry out this section, we can use both the `linDA` and
+`quaDA` functions, but we note that this time we are asked to consider every
+single subset of explanatory variables in the data, and select a subset of
+variables based on that which minimises the cross-validation estimate of the
+test error. We can carry out 10-fold cross-validation using the `validation`
+argument that is passed to both `linDA` and `quaDA`, and compare the best
+models for each of the methods, not only in terms of their MSE estimate but
+also the confusion matrices which show the nature of the misclassifications
+that each of the methods tend to make:
 
 ```{r lda fit, echo=FALSE}
 
@@ -311,7 +334,8 @@ coef(lasso_fit, s = lambda_min)
 ## Calculate all subsets to index our explanatory variables
 all_subsets <- lapply(1:9, combn, x = c(2:10), simplify = FALSE)
 ##Set initial best error rate
-best_error_rate <- 1
+best_error_rate_lda <- 1
+best_error_rate_qda <- 1
 
 ## Loop through all subsets of explanatory variables
 for (i in 1:9){
@@ -322,16 +346,51 @@ for (i in 1:9){
     current_error_rate <- lda_fit$error_rate
     ## Store the current model as the best model if it beats the
     ## previous best error rate
-    if (current_error_rate < best_error_rate){
-      best_error_rate <- current_error_rate
+    if (current_error_rate < best_error_rate_lda){
+      best_error_rate_lda <- current_error_rate
       best_lda_fit <- lda_fit
     }
   }
 }
 
-best_error_rate
+## Loop through all subsets of explanatory variables
+for (i in 1:9){
+  num_of_size_i <- length(all_subsets[i][[1]])
+  for (j in 1:num_of_size_i){
+    ## Perform Qda for each possible subset
+    qda_fit = quaDA(variables = as.matrix(dat[,all_subsets[i][[1]][j][[1]]]), group = dat$Class, validation = "crossval")
+    current_error_rate <- qda_fit$error_rate
+    ## Store the current model as the best model if it beats the
+    ## previous best error rate
+    if (current_error_rate < best_error_rate_qda){
+      best_error_rate_qda <- current_error_rate
+      best_qda_fit <- qda_fit
+    }
+  }
+}
+
+print(paste0("LDA error rate:" ,round(best_error_rate_lda,8)))
+print(best_lda_fit$confusion)
+print(paste0("QDA error rate:" ,round(best_error_rate_qda,8)))
+print(best_qda_fit$confusion)
 
 ```
+
+We notice that LDA exhibits a lower error rate than QDA in this example,
+but notice the difference exhibited by the confusion matrices - the errors
+made by LDA tend to misclassify malignant cells to benign more often, whereas
+QDA tends to more frequently misclassify benign cells to malignant. This could
+be a shortcoming of LDA in a real-world context, as it would appear it misses
+malignant cells more frequently.
+
+## Choosing our model
+
+Now we have considered all of the above models, we must come to a conclusion
+as to which is the best performing model of the options available. As we have
+used 10-fold cross validation to test the accuracy of each of the models, we
+have a statistic that is a fair measure to use for comparison. In our testing,
+the best performing of the models was LASSO, with an error rate of 0.03735,
+taken to 4 significant figures.
 
 ## Code appendix
 
